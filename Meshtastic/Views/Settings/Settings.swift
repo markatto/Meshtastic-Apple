@@ -9,6 +9,7 @@ import SwiftUI
 import OSLog
 import TipKit
 import MeshtasticProtobufs
+import CoreData
 
 struct Settings: View {
 	@Environment(\.managedObjectContext) var context
@@ -28,6 +29,12 @@ struct Settings: View {
 	@State private var selectedNode: Int = 0
 	@State private var preferredNodeNum: Int = 0
 	@State private var moduleOverride: Bool = false
+
+	#if DEBUG
+	@State private var testMessageCount: String = "500"
+	@State private var testUserCount: String = "100"
+	@State private var showTestDataInput: Bool = false
+	#endif
 
 	@ObservedObject
 	var router: Router
@@ -316,6 +323,85 @@ struct Settings: View {
 					Image(systemName: "folder")
 				}
 			}
+
+			#if DEBUG
+			Button(action: {
+				showTestDataInput = true
+			}) {
+				Label {
+					Text("Create Test Data")
+				} icon: {
+					Image(systemName: "plus.message")
+				}
+			}
+			.sheet(isPresented: $showTestDataInput) {
+				NavigationView {
+					Form {
+						Section(header: Text("Test Data Configuration")) {
+							HStack {
+								Text("Messages:")
+								Spacer()
+								TextField("Count", text: $testMessageCount)
+									.keyboardType(.numberPad)
+									.multilineTextAlignment(.trailing)
+									.frame(width: 80)
+							}
+
+							HStack {
+								Text("Users:")
+								Spacer()
+								TextField("Count", text: $testUserCount)
+									.keyboardType(.numberPad)
+									.multilineTextAlignment(.trailing)
+									.frame(width: 80)
+							}
+						}
+
+						Section {
+							Button(action: {
+								if let messageCount = Int(testMessageCount),
+								   let userCount = Int(testUserCount),
+								   messageCount > 0, userCount > 0 {
+									Settings.createTestMessages(messageCount: messageCount, userCount: userCount, context: context)
+									showTestDataInput = false
+								}
+							}) {
+								HStack {
+									Image(systemName: "plus.circle.fill")
+										.foregroundColor(.green)
+									Text("Create Test Data")
+								}
+							}
+							.disabled(Int(testMessageCount) == nil || Int(testUserCount) == nil ||
+									 Int(testMessageCount) ?? 0 <= 0 || Int(testUserCount) ?? 0 <= 0)
+						}
+
+						Section(footer: Text("This will create realistic test messages and users for performance testing. Existing test data will be cleared first.")) {
+							EmptyView()
+						}
+					}
+					.navigationTitle("Test Data")
+					.navigationBarTitleDisplayMode(.inline)
+					.toolbar {
+						ToolbarItem(placement: .navigationBarLeading) {
+							Button("Cancel") {
+								showTestDataInput = false
+							}
+						}
+					}
+				}
+			}
+
+			Button(action: {
+				Settings.clearTestMessages(context: context)
+			}) {
+				Label {
+					Text("Clear Test Data")
+				} icon: {
+					Image(systemName: "trash.circle")
+				}
+			}
+			#endif
 		}
 	}
 
@@ -560,7 +646,7 @@ struct Settings: View {
 			)
 		}
 	}
-	
+
 	func setSelectedNode(to nodeNum: Int) {
 		if nodes.count > 1 {
 			if selectedNode == 0 {
@@ -570,4 +656,212 @@ struct Settings: View {
 			self.selectedNode = Int(accessoryManager.isConnected ? nodeNum: 0)
 		}
 	}
+
+	#if DEBUG
+	static func createTestMessages(messageCount: Int, userCount: Int, context: NSManagedObjectContext) {
+		// Constants to avoid magic numbers
+		let testDeviceNum: Int64 = 4242
+		let testChannelIndex: Int32 = 0
+		let testStartUserId: Int64 = 100000
+		let testStartMessageId: Int64 = 500000
+		let messageIntervalSeconds: Int32 = 30
+		let replyInterval = 25 // Every 25th message gets a reply reference
+		let ackInterval = 7 // Every 7th message gets ACK
+		let testHardwareModelId: Int32 = 42
+		let testPortNum: Int32 = 1
+
+		print("🧪 Creating \(messageCount) test messages with \(userCount) users for performance testing...")
+
+		// Clear any existing test data first
+		clearTestMessages(context: context)
+
+		// Create "my" user (the current user)
+		let myUser = UserEntity(context: context)
+		myUser.num = testDeviceNum
+		myUser.longName = "Test Primary Device"
+		myUser.shortName = "PRIMARY"
+		myUser.userId = String(format: "%08x", testDeviceNum)
+		myUser.hwModel = "TEST_PRIMARY"
+		myUser.hwModelId = testHardwareModelId
+
+		// Create diverse test users with unique attributes
+		// userCount includes the primary user, so create userCount-1 additional users
+		var testUsers: [UserEntity] = [myUser]
+		let deviceTypes = ["HELTECV3", "TBEAM", "RAK4631", "TDECK", "TECHO"]
+		let locations = ["SF", "NYC", "LA", "CHI", "MIA", "SEA", "DEN", "ATX", "PDX", "BOS"]
+
+		let additionalUsersNeeded = max(0, userCount - 1) // Subtract 1 for primary user
+		for i in 0..<additionalUsersNeeded {
+			let user = UserEntity(context: context)
+			let userNum = testStartUserId + Int64(i)
+			user.num = userNum
+			user.longName = "\(locations[i % locations.count]) Node \(String(format: "%03d", i + 1))"
+			user.shortName = "\(locations[i % locations.count])\(i + 1)"
+			user.userId = String(format: "%08x", userNum)
+			user.hwModel = deviceTypes[i % deviceTypes.count]
+			user.hwModelId = testHardwareModelId + Int32(i % deviceTypes.count)
+			testUsers.append(user)
+		}
+
+		// Create test channel
+		let testChannel = ChannelEntity(context: context)
+		testChannel.index = testChannelIndex
+		testChannel.name = "Burning Man Test"
+		testChannel.role = 1 // PRIMARY
+		testChannel.uplinkEnabled = false
+		testChannel.downlinkEnabled = false
+
+		// Create required node infrastructure
+		let node = NodeInfoEntity(context: context)
+		node.num = testDeviceNum
+		node.user = myUser
+
+		let myInfo = MyInfoEntity(context: context)
+		myInfo.myNodeNum = testDeviceNum
+		node.myInfo = myInfo
+
+		let channelSet = NSMutableOrderedSet()
+		channelSet.add(testChannel)
+		myInfo.channels = channelSet
+
+		// Calculate message distribution
+		let channelMessageCount = messageCount * 3 / 4 // 75% channel messages
+		let directMessageCount = messageCount - channelMessageCount // 25% direct messages
+		let baseTimestamp = Int32(Date().timeIntervalSince1970 - TimeInterval(messageCount * Int(messageIntervalSeconds)))
+
+		var createdChannelMessages = 0
+		var createdDirectMessages = 0
+
+		// Create channel messages with varied content
+		let channelTopics = [
+			"Weather update", "Location check", "Battery status", "Signal strength",
+			"Route planning", "Camp coordinates", "Emergency contact", "Group meetup",
+			"Supply status", "Transport info", "Event schedule", "Safety alert"
+		]
+
+		for i in 0..<channelMessageCount {
+			let message = MessageEntity(context: context)
+			message.messageId = testStartMessageId + Int64(i)
+			message.messageTimestamp = baseTimestamp + Int32(i * Int(messageIntervalSeconds))
+			message.messagePayload = "\(channelTopics[i % channelTopics.count]) #\(i + 1): Testing channel performance with realistic message content and varying lengths."
+			message.fromUser = testUsers[i % testUsers.count]
+			message.toUser = nil // Channel message
+			message.channel = testChannelIndex
+			message.read = (i % 3) == 0 // Mark some as read
+			message.receivedACK = (i % ackInterval) == 0
+			message.ackError = 0
+			message.isEmoji = false
+			message.portNum = testPortNum
+			message.admin = false
+
+			// Add some reply references
+			if i > replyInterval && (i % replyInterval) == 0 {
+				message.replyID = testStartMessageId + Int64(i - replyInterval + (i % 5))
+			}
+
+			createdChannelMessages += 1
+		}
+
+		// Create direct messages between varied users
+		for i in 0..<directMessageCount {
+			let message = MessageEntity(context: context)
+			let messageId = testStartMessageId + Int64(channelMessageCount + i)
+			message.messageId = messageId
+			message.messageTimestamp = baseTimestamp + Int32((channelMessageCount + i) * Int(messageIntervalSeconds))
+			message.messagePayload = "DM #\(i + 1): Private message testing performance with user-to-user communication patterns."
+
+			// Create more realistic conversation patterns
+			let fromIndex = i % testUsers.count
+			let toIndex = (i + 1 + (i / 10)) % testUsers.count // Vary conversation partners
+			message.fromUser = testUsers[fromIndex]
+			message.toUser = testUsers[toIndex]
+			message.channel = testChannelIndex
+			message.read = (i % 4) == 0 // Mark some as read
+			message.receivedACK = (i % ackInterval) == 0
+			message.ackError = 0
+			message.isEmoji = false
+			message.portNum = testPortNum
+			message.admin = false
+
+			// Add reply references for conversations
+			if i > replyInterval && (i % replyInterval) == 0 {
+				message.replyID = testStartMessageId + Int64(channelMessageCount + i - replyInterval + (i % 3))
+			}
+
+			createdDirectMessages += 1
+		}
+
+		do {
+			try context.save()
+			UserDefaults.standard.set(testDeviceNum, forKey: "preferredPeripheralNum")
+
+			let totalMessages = createdChannelMessages + createdDirectMessages
+			print("✅ Successfully created exactly what was requested:")
+			print("   📊 \(totalMessages) total messages (\(createdChannelMessages) channel + \(createdDirectMessages) direct)")
+			print("   👥 \(testUsers.count) total users (1 primary + \(additionalUsersNeeded) additional)")
+			print("   📱 Set preferred device to \(testDeviceNum)")
+			print("   🔄 Restart app to see test data")
+		} catch {
+			print("❌ Error saving test data: \(error)")
+			context.rollback()
+		}
+	}
+
+	static func clearTestMessages(context: NSManagedObjectContext) {
+		let testDeviceNum: Int64 = 4242
+		let testStartUserId: Int64 = 100000
+		let testStartMessageId: Int64 = 500000
+
+		print("🧹 Clearing test messages...")
+
+		do {
+			// Clear test messages (both old and new ID ranges)
+			let messageRequest: NSFetchRequest<NSFetchRequestResult> = MessageEntity.fetchRequest()
+			messageRequest.predicate = NSPredicate(format: "messageId >= %lld OR messageId >= 10000", testStartMessageId)
+			let messageBatchDelete = NSBatchDeleteRequest(fetchRequest: messageRequest)
+			let messageResult = try context.execute(messageBatchDelete) as? NSBatchDeleteResult
+
+			// Clear test users (both old and new ranges)
+			let userRequest: NSFetchRequest<NSFetchRequestResult> = UserEntity.fetchRequest()
+			userRequest.predicate = NSPredicate(format: "num == %lld OR num >= %lld OR (num >= 999 AND num < 2000)", testDeviceNum, testStartUserId)
+			let userBatchDelete = NSBatchDeleteRequest(fetchRequest: userRequest)
+			let userResult = try context.execute(userBatchDelete) as? NSBatchDeleteResult
+
+			// Clear test channels
+			let channelRequest: NSFetchRequest<NSFetchRequestResult> = ChannelEntity.fetchRequest()
+			channelRequest.predicate = NSPredicate(format: "name CONTAINS 'Test'")
+			let channelBatchDelete = NSBatchDeleteRequest(fetchRequest: channelRequest)
+			let channelResult = try context.execute(channelBatchDelete) as? NSBatchDeleteResult
+
+			// Clear test nodes and myInfo
+			let nodeRequest: NSFetchRequest<NSFetchRequestResult> = NodeInfoEntity.fetchRequest()
+			nodeRequest.predicate = NSPredicate(format: "num == %lld OR num == 999", testDeviceNum)
+			let nodeBatchDelete = NSBatchDeleteRequest(fetchRequest: nodeRequest)
+			let nodeResult = try context.execute(nodeBatchDelete) as? NSBatchDeleteResult
+
+			let myInfoRequest: NSFetchRequest<NSFetchRequestResult> = MyInfoEntity.fetchRequest()
+			myInfoRequest.predicate = NSPredicate(format: "myNodeNum == %lld OR myNodeNum == 999", testDeviceNum)
+			let myInfoBatchDelete = NSBatchDeleteRequest(fetchRequest: myInfoRequest)
+			let myInfoResult = try context.execute(myInfoBatchDelete) as? NSBatchDeleteResult
+
+			try context.save()
+
+			let deletedMessages = messageResult?.result as? Int ?? 0
+			let deletedUsers = userResult?.result as? Int ?? 0
+			let deletedChannels = channelResult?.result as? Int ?? 0
+			let deletedNodes = nodeResult?.result as? Int ?? 0
+			let deletedMyInfos = myInfoResult?.result as? Int ?? 0
+
+			print("✅ Cleared test data:")
+			print("   📧 \(deletedMessages) messages")
+			print("   👥 \(deletedUsers) users")
+			print("   📢 \(deletedChannels) channels")
+			print("   📱 \(deletedNodes) nodes")
+			print("   ℹ️  \(deletedMyInfos) info entities")
+		} catch {
+			print("❌ Error clearing test data: \(error)")
+			context.rollback()
+		}
+	}
+	#endif
 }

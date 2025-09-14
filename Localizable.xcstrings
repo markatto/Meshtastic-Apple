@@ -7564,6 +7564,9 @@
         }
       }
     },
+    "Clear Test Data" : {
+
+    },
     "Client" : {
       "localizations" : {
         "it" : {
@@ -8984,6 +8987,9 @@
         }
       }
     },
+    "Count" : {
+
+    },
     "Counter Clockwise Rotary Event" : {
       "localizations" : {
         "it" : {
@@ -9011,6 +9017,9 @@
           }
         }
       }
+    },
+    "Create Test Data" : {
+
     },
     "Create Waypoint" : {
       "localizations" : {
@@ -21199,6 +21208,9 @@
           }
         }
       }
+    },
+    "Messages:" : {
+
     },
     "Messaging" : {
       "localizations" : {
@@ -35829,6 +35841,12 @@
         }
       }
     },
+    "Test Data" : {
+
+    },
+    "Test Data Configuration" : {
+
+    },
     "Text Message" : {
       "localizations" : {
         "de" : {
@@ -36932,6 +36950,9 @@
           }
         }
       }
+    },
+    "This will create realistic test messages and users for performance testing. Existing test data will be cleared first." : {
+
     },
     "This will disable fixed position and remove the currently set position." : {
       "localizations" : {
@@ -40125,6 +40146,9 @@
           }
         }
       }
+    },
+    "Users:" : {
+
     },
     "Uses pullup resistor" : {
       "localizations" : {
